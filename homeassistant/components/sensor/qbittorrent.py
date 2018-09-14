@@ -18,6 +18,7 @@ _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_NAME = 'QBittorrent'
 DEFAULT_PORT = 8080
+TRIM_SIZE = 35
 
 SENSOR_TYPES = {
     'current_status': ['Status', None],
@@ -26,8 +27,8 @@ SENSOR_TYPES = {
     'inactive_torrents' : ['Inactive Torrents', None],
     'downloading_torrents': ['Downloading', None],
     'seeding_torrents': ['Seeding', None],
-    'resumed_torrents' : ['Resumed Torrents', None],    
-    'paused_torrents' : ['Paused Torrents', None],    
+    'resumed_torrents' : ['Resumed Torrents', None],
+    'paused_torrents' : ['Paused Torrents', None],
     'completed_torrents' : ['Completed Torrents', None],
     'download_speed': ['Down Speed', 'KiB/s'],
     'upload_speed': ['Up Speed', 'KiB/s'],
@@ -79,6 +80,7 @@ class QbittorrentSensor(Entity):
         self._state = None
         self._available = False
         self.client = client
+        self._attribute = {}
         self._unit_of_measurement = SENSOR_TYPES[sensor_type][1]
         self.client_name = client_name
         self.type = sensor_type
@@ -100,26 +102,36 @@ class QbittorrentSensor(Entity):
         """Return the unit of measurement of this entity, if any."""
         return self._unit_of_measurement
 
+
+    @property
+    def device_state_attributes(self):
+        """Return the state attributes of the sensor."""
+        return self._attribute
+
+
     @property
     def available(self):
         """Could the device be accessed during the last update call."""
         return self._available
 
+
     def update(self):
         """Get the latest data from Qbittorrent and updates the state."""
         try:
             self.client.login(self.username, self.password)
-            
+
             self._available = True
         except:
             self._available = False
             _LOGGER.error("Unable to connect to Qbittorrent client")
             return
-        
+
+        attributes = {}
+
         if self.type == 'current_status':
             upload = float(self.client.global_transfer_info['up_info_speed'])
             download = float(self.client.global_transfer_info['dl_info_speed'])
-            
+
             if upload > 0 and download > 0:
                 self._state = 'Up/Down'
             elif upload > 0 and download == 0:
@@ -129,21 +141,73 @@ class QbittorrentSensor(Entity):
             else:
                 self._state = STATE_IDLE
         elif self.type == 'total_torrents':
-            self._state = len(self.client.torrents())
+            data = self.client.torrents()
+
+            for torrent in data:
+                attributes[trim_name(torrent, TRIM_SIZE-5)] = torrent['state']
+
+            self._state = len(data)
+            self._attribute = attributes
         elif self.type == 'active_torrents':
-            self._state = len(self.client.torrents(filter='active'))
+            data = self.client.torrents(filter='active')
+
+            for torrent in data:
+                attributes[trim_name(torrent, TRIM_SIZE-5)] = torrent['state']
+
+            self._state = len(data)
+            self._attribute = attributes
         elif self.type == 'inactive_torrents':
-            self._state = len(self.client.torrents(filter='inactive'))
+            data = self.client.torrents(filter='inactive')
+
+            for torrent in data:
+                attributes[trim_name(torrent, TRIM_SIZE-5)] = torrent['state']
+
+            self._state = len(data)
+            self._attribute = attributes
         elif self.type == 'downloading_torrents':
-            self._state = len(self.client.torrents(filter='downloading'))
+            data = self.client.torrents(filter='downloading')
+
+            for torrent in data:
+                attributes[trim_name(torrent)] = format_progress(torrent)
+
+            self._state = len(data)
+            self._attribute = attributes
         elif self.type == 'seeding_torrents':
-            self._state = len(self.client.torrents(filter='seeding'))
+            data = self.client.torrents(filter='seeding')
+
+            for torrent in data:
+                ratio = torrent['ratio']
+                ratio = float(ratio)
+                ratio = '{:.2f}'.format(ratio)
+
+                attributes[trim_name(torrent)] = ratio
+
+            self._state = len(data)
+            self._attribute = attributes
         elif self.type == 'resumed_torrents':
-            self._state = len(self.client.torrents(filter='resumed'))
+            data = self.client.torrents(filter='resumed')
+
+            for torrent in data:
+                attributes[trim_name(torrent)] = format_progress(torrent)
+
+            self._state = len(data)
+            self._attribute = attributes
         elif self.type == 'paused_torrents':
-            self._state = len(self.client.torrents(filter='paused'))
+            data = self.client.torrents(filter='paused')
+
+            for torrent in data:
+                attributes[trim_name(torrent)] = format_progress(torrent)
+
+            self._state = len(data)
+            self._attribute = attributes
         elif self.type == 'completed_torrents':
-            self._state = len(self.client.torrents(filter='completed'))
+            data = self.client.torrents(filter='completed')
+
+            for torrent in data:
+                attributes[trim_name(torrent)] = '100.0%'
+
+            self._state = len(data)
+            self._attribute = attributes
         elif self.type == 'download_speed':
             dlspeed = self.client.global_transfer_info['dl_info_speed']
             mb_spd = float(dlspeed)
@@ -154,3 +218,21 @@ class QbittorrentSensor(Entity):
             mb_spd = float(upspeed)
             mb_spd = mb_spd / 1024
             self._state = round(mb_spd, 2 if mb_spd < 0.1 else 1)
+
+
+
+def trim_name(torrent, trim_size=TRIM_SIZE):
+    name = torrent['name']
+
+    if len(name) > trim_size:
+        name = name[0:trim_size] + '...'
+
+    return name
+
+
+def format_progress(torrent):
+    progress = torrent['progress']
+    progress = float(progress) * 100
+    progress = '{:.1f}%'.format(progress)
+
+    return progress
